@@ -75,7 +75,7 @@ async def get_all_table_names(use_postgres: bool, pg_client=None, db_client=None
         List of table names
     """
     try:
-        if use_postgres and pg_client:
+        if use_postgres and pg_client is not None:
             tables = pg_client.list_tables()
             if tables and isinstance(tables[0], dict) and 'table_name' in tables[0]:
                 return [t.get('table_name') for t in tables if t.get('table_name')]
@@ -106,6 +106,7 @@ async def db_inject_schema_info(agent_name: str, tables: List[str] = None):
         # Try to use PostgreSQL client for schema information
         try:
             pg_client = PostgresClient.get_instance()
+            db_client = None  # Initialize to None when using PostgreSQL
             use_postgres = True
         except ValueError as e:
             print(f"PostgreSQL client not available: {e}. Falling back to Supabase client.")
@@ -123,15 +124,33 @@ async def db_inject_schema_info(agent_name: str, tables: List[str] = None):
         if not tables:
             # Get all tables instead of returning None
             tables = await get_all_table_names(use_postgres, pg_client, db_client)
-            if not tables or len(tables) == 0:
+            if not tables:
                 debug_box("No tables found in database")
                 return "No tables found in database."
             else:
                 debug_box(f"Found {len(tables)} tables in database")
 
         # Get schema information for each table
+        debug_box(f"Getting schema info for {len(tables)} tables")
+        
+        # If we're using PostgreSQL, initialize Supabase client for fallback
+        # because some tables might not be accessible via PostgreSQL
+        if use_postgres and db_client is None:
+            try:
+                db_client = await get_db_client()
+            except Exception as e:
+                debug_box(f"Warning: Could not initialize Supabase client for fallback: {e}")
+                # Continue without Supabase fallback
+                pass
+            
         tables_info = {}
+        tables_with_errors = []
+        
         for table in tables:
+            debug_box(f"Getting schema for table: {table}")
+            columns = None
+            relationships = None
+            
             if use_postgres:
                 # Use PostgreSQL client for schema information
                 try:
@@ -139,19 +158,40 @@ async def db_inject_schema_info(agent_name: str, tables: List[str] = None):
                     relationships = pg_client.get_table_relationships(table)
                 except Exception as e:
                     print(f"Error getting schema info with PostgreSQL client: {e}")
-                    return None
-            else:
+                    debug_box(f"Error getting schema for table {table} with PostgreSQL, trying Supabase fallback")
+                    if db_client:
+                        # Try Supabase as fallback
+                        try:
+                            columns = await db_client.describe_table(table)
+                            relationships = await db_client.get_table_relationships(table)
+                        except Exception as inner_e:  
+                            print(f"Both PostgreSQL and Supabase failed for table {table}: {inner_e}")
+                            tables_with_errors.append(table)
+                            continue
+            elif db_client:  # If not using PostgreSQL, use Supabase client
                 # Fallback to Supabase client
                 # Get columns
-                columns = await db_client.describe_table(table)
-                
-                # Get relationships
-                relationships = await db_client.get_table_relationships(table)
+                try:
+                    columns = await db_client.describe_table(table)
+                    relationships = await db_client.get_table_relationships(table)
+                except Exception as e:
+                    print(f"Error getting schema for table {table} with Supabase: {e}")
+                    tables_with_errors.append(table)
+                    continue
             
-            tables_info[table] = {
-                "columns": columns,
-                "relationships": relationships
-            }
+            # Only add table info if we successfully got columns
+            if columns is not None:
+                tables_info[table] = {
+                    "columns": columns,
+                    "relationships": relationships or []
+                }
+                
+        # Check if we got any table information successfully
+        if not tables_info:
+            debug_box(f"Failed to get schema for any tables. Errors in {len(tables_with_errors)} tables.")
+            if tables_with_errors:
+                debug_box(f"Tables with errors: {', '.join(tables_with_errors)}")
+            return "Could not retrieve schema information for any tables."
 
         # Format schema information
         if use_postgres:
