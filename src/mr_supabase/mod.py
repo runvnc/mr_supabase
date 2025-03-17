@@ -276,11 +276,11 @@ async def describe_db_table(table: str, context=None):
 
 @command()
 async def execute_db_query(query: str, context=None):
-    """Run a custom SQL query.
-
+    """Run a simplified SQL-like query (with limited support).
+    
     Args:
         query: SQL query to execute
-
+            
     Example:
         {"execute_db_query": {"query": "SELECT * FROM users WHERE email LIKE '%example.com'"}}
     """
@@ -289,7 +289,46 @@ async def execute_db_query(query: str, context=None):
         if not db_client:
             return "Error: Database client unavailable"
 
-        results = await db_client.execute_sql(query)
+        # Parse the query to determine what to do
+        query = query.strip()
+        query_lower = query.lower()
+        
+        # Simple SELECT query parser
+        if query_lower.startswith("select"):
+            # Try to parse a simple query like: SELECT columns FROM table WHERE condition
+            parts = query_lower.split()
+            if "from" not in parts:
+                return "Error: FROM clause required in SELECT query"
+            
+            # Extract the column list
+            from_index = parts.index("from")
+            columns = query[len("select"):].strip().split("from")[0].strip()
+            
+            # Extract the table name
+            table_name = parts[from_index + 1].strip().rstrip(';')
+            
+            # Extract WHERE conditions if present
+            filters = {}
+            if "where" in parts:
+                where_index = parts.index("where")
+                conditions_text = query.split("where", 1)[1].strip().rstrip(';')
+                
+                # Very simple condition parser (only handles equals conditions)
+                conditions = conditions_text.split("and")
+                for condition in conditions:
+                    if "=" in condition:
+                        col, val = condition.split("=", 1)
+                        filters[col.strip()] = val.strip().strip('\'"')
+            
+            # Execute the query using the client's query_table method
+            results = await db_client.query_table(
+                table=table_name,
+                select=columns,
+                filters=filters
+            )
+            
+        else:
+            return "Error: Only SELECT queries are supported. For other operations, use specific commands like query_db, insert_db, etc."
 
         if not results:
             return "Query executed successfully but returned no results."

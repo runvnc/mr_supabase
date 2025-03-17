@@ -170,26 +170,42 @@ class SupabaseClient:
         
         return response.data
     
-    async def execute_sql(self, query: str) -> List[Dict[str, Any]]:
+    async def execute_sql(self, query: str, unsafe: bool = False) -> List[Dict[str, Any]]:
         """
         Execute a raw SQL query.
         
         Args:
             query: SQL query to execute
+            unsafe: Whether to allow potentially unsafe operations (default: False)
             
         Returns:
             Query results
         """
-        # Simple security check to prevent destructive operations
-        query_lower = query.lower().strip()
-        if any(keyword in query_lower for keyword in ["drop", "truncate", "delete", "update", "alter"]):
-            raise ValueError("Potentially destructive SQL operations are not allowed")
+        if not unsafe:
+            # Simple security check to prevent destructive operations
+            query_lower = query.lower().strip()
+            if any(keyword in query_lower for keyword in ["drop", "truncate", "delete", "update", "alter"]):
+                raise ValueError("Potentially destructive SQL operations are not allowed")
         
-        response = self.client.rpc("execute_sql", {"query": query}).execute()
+        # For Supabase, we can't directly execute arbitrary SQL through RPC
+        # unless a specific function is created in the database
+        raise NotImplementedError("Direct SQL execution is not supported by default in Supabase")
+
+    async def query_information_schema(self, query_type: str, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Query information schema tables directly.
         
-        # Check for errors
-        if hasattr(response, 'error') and response.error:
-            raise Exception(f"Supabase SQL error: {response.error}")
+        This is a safer method to get database metadata without needing to execute raw SQL.
+        """
+        table = f"information_schema.{query_type}"
+        query = self.client.from_(table).select('*')
+        
+        # Apply filters
+        if filters:
+            for column, value in filters.items():
+                query = query.eq(column, value)
+        
+        response = query.execute()
         
         return response.data
     
@@ -200,16 +216,13 @@ class SupabaseClient:
         Returns:
             List of table names
         """
-        # PostgreSQL query to get all tables
-        query = """
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-        ORDER BY table_name;
-        """
+        results = await self.client.from_("information_schema.tables").select("table_name") \
+            .eq("table_schema", "public") \
+            .order("table_name") \
+            .execute()
         
-        response = await self.execute_sql(query)
-        return [record.get("table_name") for record in response if record.get("table_name")]
+        # Extract table names from results
+        return [record.get("table_name") for record in results.data if record.get("table_name")]
     
     async def describe_table(self, table: str) -> List[Dict[str, Any]]:
         """
@@ -221,23 +234,15 @@ class SupabaseClient:
         Returns:
             List of column descriptions
         """
-        # PostgreSQL query to get table schema
-        query = f"""
-        SELECT 
-            column_name, 
-            data_type, 
-            is_nullable, 
-            column_default
-        FROM 
-            information_schema.columns
-        WHERE 
-            table_schema = 'public' 
-            AND table_name = '{table}'
-        ORDER BY 
-            ordinal_position;
-        """
+        results = await self.client.from_("information_schema.columns").select(
+            "column_name,data_type,is_nullable,column_default"
+        ) \
+        .eq("table_schema", "public") \
+        .eq("table_name", table) \
+        .order("ordinal_position") \
+        .execute()
         
-        return await self.execute_sql(query)
+        return results.data
     
     async def get_table_relationships(self, table: str = None) -> List[Dict[str, Any]]:
         """
@@ -249,36 +254,49 @@ class SupabaseClient:
         Returns:
             List of relationship descriptions
         """
-        # Base query to get foreign key relationships
-        query = """
-        SELECT
-            tc.table_schema,
-            tc.constraint_name,
-            tc.table_name,
-            kcu.column_name,
-            ccu.table_schema AS foreign_table_schema,
-            ccu.table_name AS foreign_table_name,
-            ccu.column_name AS foreign_column_name
-        FROM
-            information_schema.table_constraints AS tc
-            JOIN information_schema.key_column_usage AS kcu
-              ON tc.constraint_name = kcu.constraint_name
-              AND tc.table_schema = kcu.table_schema
-            JOIN information_schema.constraint_column_usage AS ccu
-              ON ccu.constraint_name = tc.constraint_name
-              AND ccu.table_schema = tc.table_schema
-        WHERE
-            tc.constraint_type = 'FOREIGN KEY'
-            AND tc.table_schema = 'public'
-        """
-        
-        # Add table filter if specified
+        # For getting relationships we need to use a more complex approach
+        # since we need to join multiple tables
+        # 
+        # First, get constraint names for the specified table(s)
+        constraints_query = self.client.from_("information_schema.table_constraints") \
+            .select("constraint_name,table_name") \
+            .eq("constraint_type", "FOREIGN KEY") \
+            .eq("table_schema", "public")
+            
         if table:
-            query += f" AND tc.table_name = '{table}'"
+            constraints_query = constraints_query.eq("table_name", table)
+            
+        constraints = await constraints_query.execute()
         
-        query += " ORDER BY tc.table_name, kcu.column_name;"
-        
-        return await self.execute_sql(query)
+        if not constraints.data:
+            return []
+            
+        # Now get the column information for each constraint
+        result = []
+        for constraint in constraints.data:
+            # Get the local column
+            kcu_data = await self.client.from_("information_schema.key_column_usage") \
+                .select("column_name") \
+                .eq("constraint_name", constraint["constraint_name"]) \
+                .eq("table_schema", "public") \
+                .execute()
+                
+            # Get the referenced column
+            ccu_data = await self.client.from_("information_schema.constraint_column_usage") \
+                .select("table_name,column_name") \
+                .eq("constraint_name", constraint["constraint_name"]) \
+                .eq("table_schema", "public") \
+                .execute()
+                
+            if kcu_data.data and ccu_data.data:
+                result.append({
+                    "table_name": constraint["table_name"],
+                    "column_name": kcu_data.data[0]["column_name"],
+                    "foreign_table_name": ccu_data.data[0]["table_name"],
+                    "foreign_column_name": ccu_data.data[0]["column_name"]
+                })
+                
+        return result
     
     def format_schema_for_agent(self, tables_info: Dict[str, Any]) -> str:
         """
