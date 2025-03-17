@@ -22,7 +22,6 @@ The plugin uses environment variables for configuration:
 - `POSTGRES_CONNECTION_STRING`: PostgreSQL connection string for direct database access
   - Format: `postgresql://postgres:[PASSWORD]@db.[PROJECT_ID].supabase.co:5432/postgres`
   - Available in Supabase dashboard: Project Settings > Database > Connection string > URI format
-
 Using the direct PostgreSQL connection is recommended for reliable schema information injection, as the Supabase client has limitations when accessing information_schema tables. If not provided, the plugin will fall back to the Supabase client for all operations.
 
 For security in production environments, it's recommended to store all credentials in the environment rather than hardcoding them.
@@ -35,7 +34,6 @@ For security in production environments, it's recommended to store all credentia
 - `delete_db`: Delete records from a database table
 - `list_db_tables`: List all available tables in the database
 - `describe_db_table`: Get detailed schema information for a specific table
-- `execute_db_query`: Run a custom SQL query (with safety checks)
 - `get_db_relationships`: Get information about relationships between tables
 
 ## Usage Example

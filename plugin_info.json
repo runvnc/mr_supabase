@@ -13,7 +13,6 @@
     "delete_db",
     "list_db_tables",
     "describe_db_table",
-    "execute_db_query",
     "get_db_relationships"
   ]
 }
