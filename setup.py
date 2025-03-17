@@ -19,6 +19,7 @@ setup(
     install_requires=[
         "supabase>=1.0.0",
         "python-dotenv>=0.19.0",
+        "psycopg2-binary>=2.9.5",
     ],
     python_requires=">=3.8",
 )
