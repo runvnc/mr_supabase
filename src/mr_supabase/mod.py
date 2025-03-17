@@ -62,6 +62,34 @@ def format_schema_from_postgres_data(tables_info: Dict[str, Any]) -> str:
     
     return schema_text
 
+# Helper function to get all table names
+async def get_all_table_names(use_postgres: bool, pg_client=None, db_client=None) -> List[str]:
+    """Get all table names from the database.
+    
+    Args:
+        use_postgres: Whether to use PostgreSQL client
+        pg_client: PostgreSQL client instance (if use_postgres is True)
+        db_client: Supabase client instance (if use_postgres is False)
+        
+    Returns:
+        List of table names
+    """
+    try:
+        if use_postgres and pg_client:
+            tables = pg_client.list_tables()
+            if tables and isinstance(tables[0], dict) and 'table_name' in tables[0]:
+                return [t.get('table_name') for t in tables if t.get('table_name')]
+            return tables
+        elif db_client:
+            tables = await db_client.list_tables()
+            if tables and isinstance(tables[0], dict) and 'table_name' in tables[0]:
+                return [t.get('table_name') for t in tables if t.get('table_name')]
+            return tables
+        return []
+    except Exception as e:
+        print(f"Error getting table names: {e}")
+        return []
+        
 # Service to inject schema info
 @service()
 async def db_inject_schema_info(agent_name: str, tables: List[str] = None):
@@ -89,10 +117,17 @@ async def db_inject_schema_info(agent_name: str, tables: List[str] = None):
         # If no tables specified, load from agent settings
         if tables is None:
             settings = load_agent_db_settings(agent_name)
-            tables = settings.get("enabled_tables", []) 
+            enabled_tables = settings.get("enabled_tables", [])
+            tables = enabled_tables if enabled_tables else None
 
         if not tables:
-            return None
+            # Get all tables instead of returning None
+            tables = await get_all_table_names(use_postgres, pg_client, db_client)
+            if not tables or len(tables) == 0:
+                debug_box("No tables found in database")
+                return "No tables found in database."
+            else:
+                debug_box(f"Found {len(tables)} tables in database")
 
         # Get schema information for each table
         tables_info = {}
@@ -511,6 +546,7 @@ async def inject_db_schema(data: dict, context=None) -> dict:
 
         # Skip if no messages
         if 'messages' not in data or not isinstance(data['messages'], list) or not data['messages']:
+            debug_box("Aborting schema injection, missing messages")
             return data
 
         has_system_message = data['messages'] and data['messages'][0]['role'] == 'system'
@@ -519,6 +555,7 @@ async def inject_db_schema(data: dict, context=None) -> dict:
         try:
             agent_name = context.agent_name
             if not agent_name:
+                debug_box("Aborting inject schema because no agent name")
                 return data
         except Exception as e:
             print(f"Error accessing agent_name from context: {e}")
@@ -527,22 +564,7 @@ async def inject_db_schema(data: dict, context=None) -> dict:
         # Load agent DB settings
         settings = load_agent_db_settings(agent_name)
         enabled_tables = settings.get("enabled_tables", [])
-
-        # Skip if no tables enabled
-        if not enabled_tables:
-            return data
-
-        # Only clean db schema from non-system messages
-        data['messages'] = [
-            msg if i == 0 and msg['role'] == 'system' else 
-            {
-                **msg,
-                'content': msg['content'] if not isinstance(msg.get('content'), str) else 
-                           msg['content'].replace(
-                               DB_SCHEMA_START_DELIMITER, '').replace(DB_SCHEMA_END_DELIMITER, '')
-            }
-            for i, msg in enumerate(data['messages'])
-        ]
+        debug_box(f"Found {len(enabled_tables)} enabled tables in settings")
         
         # Check if schema information already exists in system message
         schema_exists = False
@@ -550,26 +572,32 @@ async def inject_db_schema(data: dict, context=None) -> dict:
             system_content = data['messages'][0].get('content', '')
             schema_exists = DB_SCHEMA_START_DELIMITER in system_content and DB_SCHEMA_END_DELIMITER in system_content
         
-        debug_box(f"Agent {agent_name} has {len(enabled_tables)} enabled tables. Schema exists: {schema_exists}")
+        debug_box(f"Schema exists in system message: {schema_exists}")
 
         # Only query database for schema if it doesn't already exist in system message
         schema_info = None
         if not schema_exists:
-            schema_info = await db_inject_schema_info(agent_name, enabled_tables)
+            # If no tables are specifically enabled, we'll get all tables
+            tables_to_use = enabled_tables if enabled_tables else None
+            schema_info = await db_inject_schema_info(agent_name, tables_to_use)
+            debug_box(f"Generated schema info: {schema_info is not None}")
 
         # Skip if no schema info
         if not schema_info:
+            debug_box("No schema info generated")
             return data
 
         # Add schema info to system message (first message)
         if has_system_message:
             system_msg = data['messages'][0]
-
+            debug_box("Adding schema to system message")
+            
             # Add delimited schema info
             delimited_schema = f"\n\n{DB_SCHEMA_START_DELIMITER}\n{schema_info}\n{DB_SCHEMA_END_DELIMITER}"
 
             if isinstance(system_msg.get('content'), str):
                 system_msg['content'] += delimited_schema
+                debug_box("Added schema to system message content")
             elif isinstance(system_msg.get('content'), list):
                 # Handle multipart messages
                 system_msg['content'].append({
@@ -577,7 +605,9 @@ async def inject_db_schema(data: dict, context=None) -> dict:
                     "text": delimited_schema
                 })
 
-            debug_box("Added schema information to system message")
+            debug_box("Schema injection complete")
+        else:
+            debug_box("No system message to add schema to")
 
         return data
 
