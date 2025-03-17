@@ -1,0 +1,19 @@
+{
+  "name": "MindRoot Supabase Database Integration",
+  "version": "0.1.0",
+  "description": "Integrates Supabase database functionality into MindRoot agents with generic database commands",
+  "services": [
+    "get_db_client",
+    "db_inject_schema_info"
+  ],
+  "commands": [
+    "query_db",
+    "insert_db",
+    "update_db",
+    "delete_db",
+    "list_db_tables",
+    "describe_db_table",
+    "execute_db_query",
+    "get_db_relationships"
+  ]
+}
