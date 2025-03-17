@@ -49,8 +49,20 @@ class PostgresClient:
         """
         conn = self._get_connection()
         try:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(query, params or {})
+            # Convert dictionary params to tuple if needed
+            if isinstance(params, dict):
+                # If the query uses named parameters (%s(name)s) keep it as a dict
+                # Otherwise convert to a tuple for positional parameters (%s)
+                if "%(" in query and ")s" in query:
+                    pass  # Keep as dict for named parameters
+                else: 
+                    # Convert dict to tuple for positional parameters
+                    params = tuple(params.values())
+            elif params is None:
+                params = ()
+                
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:                
+                cursor.execute(query, params)
                 results = cursor.fetchall()
                 return [dict(row) for row in results]
         except Exception as e:
@@ -98,9 +110,9 @@ class PostgresClient:
             table_schema = 'public'
             AND table_name = %s
         ORDER BY 
-            ordinal_position
+            ordinal_position;
         """
-        return self.execute_query(query, {"table": table})
+        return self.execute_query(query, (table,))
     
     def get_table_relationships(self, table: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get foreign key relationships for a table or all tables.
@@ -132,7 +144,7 @@ class PostgresClient:
         
         if table:
             query += " AND tc.table_name = %s"
-            return self.execute_query(query, {"table": table})
+            return self.execute_query(query, (table,))
         else:
             return self.execute_query(query)
     
