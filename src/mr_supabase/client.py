@@ -36,6 +36,52 @@ class SupabaseClient:
         """Get the raw Supabase client."""
         return self.client
     
+    def _apply_raw_filters(self, query, raw_filters: str):
+        """Apply raw filters to a Supabase query.
+        
+        Args:
+            query: The Supabase query object
+            raw_filters: A comma-separated string of filter expressions in the format 
+                        "column.operator.value,column.operator.value"
+                        Example: "name.eq.John,age.gt.25,email.like.%example.com"
+        
+        Returns:
+            The query with filters applied
+        """
+        if not raw_filters:
+            return query
+        
+        filter_expressions = raw_filters.split(',')
+        
+        for expr in filter_expressions:
+            parts = expr.strip().split('.')
+            if len(parts) < 3:
+                print(f"Warning: Invalid filter expression '{expr}'. Expected format: column.operator.value")
+                continue
+                
+            column = parts[0]
+            operator = parts[1]
+            # Join the remaining parts with dots in case the value itself contains dots
+            value = '.'.join(parts[2:])
+            
+            # Convert value if needed (handle string, number, boolean, null)
+            if value.lower() == 'null':
+                value = None
+            elif value.lower() == 'true':
+                value = True
+            elif value.lower() == 'false':
+                value = False
+            elif value.isdigit():
+                value = int(value)
+            
+            # Apply filter based on operator
+            if hasattr(query, operator) and callable(getattr(query, operator)):
+                query = getattr(query, operator)(column, value)
+            else:
+                print(f"Warning: Unsupported filter operator '{operator}'")
+        
+        return query
+    
     async def query_table(
         self,
         table: str,
@@ -43,7 +89,8 @@ class SupabaseClient:
         filters: Optional[Dict[str, Any]] = None,
         order: Optional[str] = None,
         limit: Optional[int] = None,
-        offset: Optional[int] = None
+        offset: Optional[int] = None,
+        raw_filters: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Query records from a table with filters and pagination.
@@ -55,6 +102,7 @@ class SupabaseClient:
             order: Column to order by (format: "column.asc" or "column.desc")
             limit: Maximum number of records to return
             offset: Number of records to skip
+            raw_filters: Raw filters in the format "column.operator.value,column.operator.value"
             
         Returns:
             List of records as dictionaries
@@ -65,6 +113,9 @@ class SupabaseClient:
         if filters:
             for column, value in filters.items():
                 query = query.eq(column, value)
+        
+        # Apply raw filters
+        query = self._apply_raw_filters(query, raw_filters)
         
         # Apply order
         if order:
@@ -90,7 +141,8 @@ class SupabaseClient:
     async def insert_record(
         self,
         table: str,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
+        raw_filters: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Insert a new record into a table.
@@ -98,6 +150,7 @@ class SupabaseClient:
         Args:
             table: Name of the table to insert into
             data: Dictionary of column-value pairs
+            raw_filters: Optional raw filters to apply after insertion
             
         Returns:
             Inserted record
@@ -107,6 +160,9 @@ class SupabaseClient:
         # Check for errors
         if hasattr(response, 'error') and response.error:
             raise Exception(f"Supabase insert error: {response.error}")
+            
+        # TODO: Raw filters can't be applied to insert operations as currently structured
+        # Would need to return a selection after insert to do filtering
         
         return response.data[0] if response.data else None
     
@@ -114,7 +170,8 @@ class SupabaseClient:
         self,
         table: str,
         data: Dict[str, Any],
-        filters: Dict[str, Any]
+        filters: Dict[str, Any],
+        raw_filters: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Update records in a table based on filters.
@@ -123,6 +180,7 @@ class SupabaseClient:
             table: Name of the table to update
             data: Dictionary of column-value pairs to update
             filters: Dictionary of column-value pairs to filter by
+            raw_filters: Raw filters in the format "column.operator.value,column.operator.value"
             
         Returns:
             List of updated records
@@ -132,6 +190,9 @@ class SupabaseClient:
         # Apply filters
         for column, value in filters.items():
             query = query.eq(column, value)
+        
+        # Apply raw filters
+        query = self._apply_raw_filters(query, raw_filters)
         
         response = query.execute()
         
@@ -144,7 +205,8 @@ class SupabaseClient:
     async def delete_records(
         self,
         table: str,
-        filters: Dict[str, Any]
+        filters: Dict[str, Any],
+        raw_filters: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Delete records from a table based on filters.
@@ -152,6 +214,7 @@ class SupabaseClient:
         Args:
             table: Name of the table to delete from
             filters: Dictionary of column-value pairs to filter by
+            raw_filters: Raw filters in the format "column.operator.value,column.operator.value"
             
         Returns:
             List of deleted records
@@ -161,6 +224,9 @@ class SupabaseClient:
         # Apply filters
         for column, value in filters.items():
             query = query.eq(column, value)
+        
+        # Apply raw filters
+        query = self._apply_raw_filters(query, raw_filters)
         
         response = query.execute()
         
@@ -204,6 +270,9 @@ class SupabaseClient:
         if filters:
             for column, value in filters.items():
                 query = query.eq(column, value)
+        
+        # Apply raw filters
+        query = self._apply_raw_filters(query, raw_filters)
         
         response = query.execute()
         

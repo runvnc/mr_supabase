@@ -135,7 +135,8 @@ async def db_inject_schema_info(agent_name: str, tables: List[str] = None):
 # DB Commands
 @command()
 async def query_db(table: str, select: str = "*", filters: Dict[str, Any] = None, 
-                  order: str = None, limit: int = None, offset: int = None, context=None):
+                  order: str = None, limit: int = None, offset: int = None,
+                  raw_filters: str = None, context=None):
     """Query records from a database table.
 
     Args:
@@ -145,6 +146,10 @@ async def query_db(table: str, select: str = "*", filters: Dict[str, Any] = None
         order: Column to order by (format: "column.asc" or "column.desc")
         limit: Maximum number of records to return
         offset: Number of records to skip
+        raw_filters: Comma-separated list of raw filter expressions in the format 
+                    "column.operator.value". Supports all Supabase filter operators.
+                    Example: "status.eq.active,created_at.gt.2025-01-01,email.like.%example.com"
+                    This provides more advanced filtering than the simple filters parameter.
 
     Example:
         {"query_db": {"table": "users", "select": "*", "filters": {"role": "admin"}, "limit": 10}}
@@ -160,7 +165,8 @@ async def query_db(table: str, select: str = "*", filters: Dict[str, Any] = None
             filters=filters,
             order=order,
             limit=limit,
-            offset=offset
+            offset=offset,
+            raw_filters=raw_filters
         )
 
         # Format results
@@ -202,13 +208,17 @@ async def insert_db(table: str, data: Dict[str, Any], context=None):
         return format_error_response(e)
 
 @command()
-async def update_db(table: str, data: Dict[str, Any], filters: Dict[str, Any], context=None):
+async def update_db(table: str, data: Dict[str, Any], filters: Dict[str, Any] = None, 
+                   raw_filters: str = None, context=None):
     """Update existing records in a database table.
 
     Args:
         table: Name of the table to update
         data: Dictionary of column-value pairs to update
-        filters: Dictionary of column-value pairs to filter by
+        filters: Dictionary of column-value pairs to filter by using equality (column = value)
+        raw_filters: Comma-separated list of raw filter expressions in the format 
+                    "column.operator.value". Supports all Supabase filter operators.
+                    Example: "status.eq.active,created_at.gt.2025-01-01,email.like.%example.com"
 
     Example:
         {"update_db": {"table": "tasks", "data": {"status": "completed"}, "filters": {"id": 123}}}
@@ -221,7 +231,8 @@ async def update_db(table: str, data: Dict[str, Any], filters: Dict[str, Any], c
         results = await db_client.update_records(
             table=table,
             data=data,
-            filters=filters
+            filters=filters or {},
+            raw_filters=raw_filters
         )
 
         if not results:
@@ -235,12 +246,16 @@ async def update_db(table: str, data: Dict[str, Any], filters: Dict[str, Any], c
         return format_error_response(e)
 
 @command()
-async def delete_db(table: str, filters: Dict[str, Any], context=None):
+async def delete_db(table: str, filters: Dict[str, Any] = None, 
+                   raw_filters: str = None, context=None):
     """Delete records from a database table.
 
     Args:
         table: Name of the table to delete from
-        filters: Dictionary of column-value pairs to filter by
+        filters: Dictionary of column-value pairs to filter by using equality (column = value)
+        raw_filters: Comma-separated list of raw filter expressions in the format 
+                    "column.operator.value". Supports all Supabase filter operators.
+                    Example: "status.eq.active,created_at.gt.2025-01-01,email.like.%example.com"
 
     Example:
         {"delete_db": {"table": "tasks", "filters": {"id": 123}}}
@@ -252,7 +267,8 @@ async def delete_db(table: str, filters: Dict[str, Any], context=None):
 
         results = await db_client.delete_records(
             table=table,
-            filters=filters
+            filters=filters or {},
+            raw_filters=raw_filters
         )
 
         if not results:
@@ -389,19 +405,35 @@ async def execute_db_query(query: str, context=None):
             from_index = parts.index("from")
             columns = query[len("select"):].strip().split("from")[0].strip()
             
-            # Extract the table name
+            # Extract the table name (use lowercase for parsing)
             table_name = parts[from_index + 1].strip().rstrip(';')
             
+            # Extract WHERE conditions if present (case-insensitive)
             # Extract WHERE conditions if present
             filters = {}
             if "where" in parts:
                 where_index = parts.index("where")
-                conditions_text = query.split("where", 1)[1].strip().rstrip(';')
+                conditions_text = query_lower.split("where", 1)[1].strip().rstrip(';')
                 
                 # Very simple condition parser (only handles equals conditions)
-                conditions = conditions_text.split("and")
+                # Handle both uppercase and lowercase AND
+                if " and " in conditions_text:
+                    conditions = conditions_text.split(" and ")
+                else:
+                    conditions = [conditions_text]
+                    
                 for condition in conditions:
-                    if "=" in condition:
+                    condition = condition.strip()
+                    # Check for LIKE conditions
+                    if " like " in condition.lower():
+                        return "Error: LIKE conditions are not supported in the simplified SQL parser. " + \
+                               "Please use query_db with appropriate filters instead, or contact an " + \
+                               "administrator to set up a custom PostgreSQL function."
+                    # Check for OR conditions
+                    elif " or " in condition.lower():
+                        return "Error: OR conditions are not supported in the simplified SQL parser. " + \
+                               "Please use query_db with appropriate filters instead."
+                    elif "=" in condition:
                         col, val = condition.split("=", 1)
                         filters[col.strip()] = val.strip().strip('\'"')
             
@@ -413,7 +445,7 @@ async def execute_db_query(query: str, context=None):
             )
             
         else:
-            return "Error: Only SELECT queries are supported. For other operations, use specific commands like query_db, insert_db, etc."
+            return "Error: Only basic SELECT queries are supported. For complex queries or other operations, use the specific commands like query_db, insert_db, etc."
 
         if not results:
             return "Query executed successfully but returned no results."
