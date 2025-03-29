@@ -34,6 +34,7 @@ class PostgresClient:
     def _get_connection(self):
         """Get a PostgreSQL connection, creating one if needed."""
         if self.conn is None or self.conn.closed:
+            print("Tryin to connect to postgres, connection string is ", self.connection_string)
             self.conn = psycopg2.connect(self.connection_string)
         return self.conn
     
