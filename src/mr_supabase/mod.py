@@ -522,7 +522,8 @@ async def inject_db_schema(data: dict, context=None) -> dict:
 
         # Load agent DB settings
         settings = load_agent_db_settings(agent_name)
-        enabled_tables = settings.get("enabled_tables", [])
+        #enabled_tables = settings.get("enabled_tables", [])
+        enabled_tables = None
         debug_box(f"Found {len(enabled_tables)} enabled tables in settings")
         
         # Check if schema information already exists in system message
