@@ -7,6 +7,7 @@ import json
 import traceback
 from .client import SupabaseClient
 from .postgres_client import PostgresClient
+
 from .utils import (
     load_agent_db_settings,
     extract_schema_info,

@@ -16,8 +16,12 @@ class PostgresClient:
     @classmethod
     def get_instance(cls) -> 'PostgresClient':
         """Get or create a singleton instance of the PostgreSQL client."""
-        if cls._instance is None:
-            cls._instance = cls()
+        try:
+            cls._instance.close()
+        except Exception:
+            pass
+        cls._instance = cls()
+       
         return cls._instance
     
     def __init__(self):
